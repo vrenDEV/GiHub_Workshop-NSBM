@@ -1,5 +1,6 @@
 name: Code Scan — Semgrep
 
+# Runs on every PR targeting main, and on direct pushes to main
 on:
   pull_request:
     branches:
@@ -9,9 +10,9 @@ on:
       - main
 
 permissions:
-  contents: read
-  security-events: write
-  pull-requests: read
+  contents: read         # read source code
+  security-events: write # upload SARIF to GitHub Security tab
+  pull-requests: read    # read PR metadata
 
 jobs:
   semgrep:
@@ -19,40 +20,39 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: semgrep/semgrep
+      image: semgrep/semgrep  # official Semgrep image — no install step needed
 
-    # Only run on PRs from forks or direct pushes — skip Dependabot
+    # Skip Dependabot PRs — it cannot access secrets
     if: github.actor != 'dependabot[bot]'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run Semgrep — secrets detection
+      # ── Single scan step ──────────────────────────────────────────────────
+      # semgrep scan (not semgrep ci) supports --error and --sarif-output together.
+      # --error   → exits with code 1 if any findings exist → PR check fails
+      # --sarif-output → writes results for GitHub Security tab upload below
+      - name: Run Semgrep
         run: |
-          semgrep ci \
+          semgrep scan \
             --config "p/secrets" \
             --config "p/python" \
             --config "p/security-audit" \
-            --sarif \
-            --output semgrep-results.sarif
+            --sarif-output=semgrep-results.sarif \
+            --error \
+            .
         env:
-          # No SEMGREP_APP_TOKEN needed for open source rulesets
+          # Optional — connect to Semgrep dashboard for richer reporting.
+          # Works fine without this; remove the env block if not using the dashboard.
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
-      - name: Upload SARIF results to GitHub Security tab
+      # ── Upload results to GitHub Security tab ────────────────────────────
+      # always() ensures this runs even when the scan step fails,
+      # so findings are visible in the Security tab regardless of exit code.
+      - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
-
-      - name: Fail if secrets or critical issues found
-        run: |
-          semgrep ci \
-            --config "p/secrets" \
-            --config "p/python" \
-            --config "p/security-audit" \
-            --error
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
